@@ -1,0 +1,2 @@
+pub const DISPLAY_BOSS_HEALTHBAR_DS1R: u32 = 0x4905f0;
+pub const GET_NPC_NAME_DS1R: u32 = 0x53db30;

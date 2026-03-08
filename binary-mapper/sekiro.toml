@@ -1,0 +1,7 @@
+[[patterns]]
+pattern = "41 b8 0b 01 00 00 48 8b cf e8 $ { ' }"
+captures = ["", "GET_MESSAGE_SDT"]
+
+[[patterns]]
+pattern = "c6 44 ? ? 00 c6 44 ? ? 00 44 8b 4b 0c 8b 53 04 e8 $ { ' }"
+captures = ["", "DISPLAY_BOSS_HEALTHBAR_SDT"]

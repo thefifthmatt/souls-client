@@ -1,0 +1,104 @@
+[[patterns]]
+pattern = "8B DA 44 8B CA 33 D2 48 8B F9 44 8D 42 6F E8 $ { ' }"
+captures = ["", "GET_MESSAGE_RVA"]
+
+[[patterns]]
+pattern = "48 8b cf ff 90 78 05 00 00 0f b6 08 41 88 4e 32 48 8b 1d $ { ' }"
+captures = ["", "GLOBAL_FIELD_AREA"]
+
+[[patterns]]
+pattern = "48 8b d3 e8 $ { ' } 48 8b 5c 24 38 48 8b 03 48 89 87 18 02 00 00"
+captures = ["", "NET_CHR_SYNC_SETUP_ENTITY_1"]
+
+[[patterns]]
+pattern = "41 b0 01 48 8b d6 48 8b 89 e0 e5 01 00 e8 $ { ' } 90"
+captures = ["", "NET_CHR_SYNC_SETUP_ENTITY_2"]
+
+[[patterns]]
+pattern = "41 b8 ff 0f 00 00 48 8b d6 48 8b 89 e0 e5 01 00 e8 $ { ' } 90"
+captures = ["", "NET_CHR_SYNC_SETUP_ENTITY_3"]
+
+[[patterns]]
+pattern = "4c 8b 00 48 8d 55 c0 49 8b 4f 30 e8 $ { ' }"
+captures = ["", "SPAWN_CHR"]
+
+[[patterns]]
+pattern = "e8 $ { ' } 48 8b d0 eb 03 48 8b d6 48 85 d2"
+captures = ["", "EVENT_INS_CONSTRUCTOR"]
+
+[[patterns]]
+pattern = "? ? ? ? ? ? ? ? ? ? 49 8B 80 D0 00 00 00 49 8B F8 8B 10 81 FA E8 03 00 00"
+captures = ["EMEVD_GROUP_SWITCH"]
+
+[[patterns]]
+pattern = "4c 8b ? 18 33 c0 48 85 d2 74 ?"
+captures = ["MOUNT_RIDE"]
+
+[[patterns]]
+pattern = "89 4e 08 8b 44 24 ? 89 46 0c 48 8b 0d ? ? ? ? 48 8b 01 ba ' 00 05 00 00 41 b8 08 00 00 00 ff ? ? 48 89 46 18 48 85 c0 74 ? bf ' 50 00 00 00 89 7e 10 33 d2 41 b8 ' 00 05 00 00"
+captures = ["", "SUMMON_BUDDY_CHRSET_ALLOC_SIZE", "SUMMON_BUDDY_CHRSET_CAPACITY", "SUMMON_BUDDY_CHRSET_MEMSET_SIZE"]
+
+[[patterns]]
+pattern = "49 8b d4 e8 $ { ' } b2 01 49 8b cc e8"
+captures = ["", "REMOVE_CHR_INS"]
+
+[[patterns]]
+pattern = "45 33 c0 48 8b d6 48 8d ? ? e8 $ { ' } 48 8b d0 83 cf 02"
+captures = ["", "GET_CHR_NAME"]
+
+[[patterns]]
+pattern = "41 0f 44 ? 89 44 ? ? 0f bf ? 48 8d 4c ? ? e8 $ { ' }"
+captures = ["", "DISPLAY_BOSS_HEALTHBAR"]
+
+[[patterns]]
+pattern = "45 33 c0 33 d2 e8 $ { ' } 48 85 c0 74 ? 80 a0 c5 01 00 00 ef"
+captures = ["", "GET_CHR_INS_BY_ENTITY_ID"]
+
+[[patterns]]
+pattern = "48 8b 05 $ { ' } 48 85 c0 74 04 48 8b 58 08 48 85 db"
+captures = ["", "GAME_DATA_MAN"]
+
+# Inventory AoBs are not great, but stable
+[[patterns]]
+pattern = "? ? ? ? ? ? ? ? ? ? ? ? ? ? ? 32 DB 41 8B E8 48 8B F9 83 FA 0D"
+captures = ["EQUIP_MAGIC"]
+
+[[patterns]]
+pattern = "? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? 48 85 d2 74 ? c7 44 24 ? ff ff ff ff c7 44 24 ? 00 00 00 00"
+captures = ["UNEQUIP_MAGIC"]
+
+[[patterns]]
+pattern = "? ? ? ? ? ? ? ? ? ? 48 8B F9 48 83 C1 10 E8 ? ? ? ? 8B 4F"
+captures = ["EQUIP_INVENTORY"]
+
+[[patterns]]
+pattern = "? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? 8B DA 48 8B F9 83 FA 05"
+captures = ["UNEQUIP_INVENTORY"]
+
+[[patterns]]
+pattern = "44 89 6c 24 28 44 88 64 24 20 4d 8b ce 4c 8b c7 48 8b d3 e8 $ { ' }"
+captures = ["", "LOAD_TPF_RES_CAP_RVA"]
+
+[[vmts]]
+class = "CS::CSEmkEventIns"
+captures = { "EVENT_INS_DESTRUCTOR" = 0 }
+
+[[vmts]]
+class = "CS::CSEmevdRepositoryImp"
+vftable = "csemevd_repository_vmt"
+
+[[vmts]]
+class = "CS::CSEmevdResCap"
+vftable = "csemevd_res_cap_vmt"
+
+[[vmts]]
+class = "CS::TpfRepositoryImp"
+vftable = "tpf_repository_vmt"
+
+[[vmts]]
+class = "CS::TpfFileCap"
+vftable = "tpf_file_cap_vmt"
+
+[[vmts]]
+class = "CS::TpfResCap"
+vftable = "tpf_res_cap_vmt"

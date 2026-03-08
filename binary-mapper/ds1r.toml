@@ -1,0 +1,7 @@
+[[patterns]]
+pattern = "80 78 3b 00 74 ? b9 10 27 00 00 e8 $ { ' }"
+captures = ["", "GET_NPC_NAME_DS1R"]
+
+[[patterns]]
+pattern = "44 0f bf 4f 0a 8b d0 44 0f bf 47 08 e8 $ { ' }"
+captures = ["", "DISPLAY_BOSS_HEALTHBAR_DS1R"]

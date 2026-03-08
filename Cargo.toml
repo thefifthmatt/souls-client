@@ -1,0 +1,54 @@
+[package]
+name = "souls-client"
+version = "0.1.0"
+edition = "2024"
+authors = ["thefifthmatt"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[build]
+target = "x86_64-pc-windows-msvc"
+
+[dependencies]
+eldenring.path = "fromsoftware-rs/crates/eldenring"
+eyre = "0.6.12"
+fromsoftware-shared.path = "fromsoftware-rs/crates/shared"
+simplelog = { version = "0.12.2", default-features = false }
+libhotpatch = { version = "1.1.0", default-features = false }
+log = "0.4.28"
+windows = { version = "0.62.2", features = [
+    "Win32_System_SystemServices",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_SystemInformation", "Win32_Foundation", 
+] }
+winhook = "0.1.2"
+toml = "0.9.11"
+serde = { version = "1.0.228", features = ["serde_derive"] }
+serde_json = "1.0.149"
+closure-ffi = "5.0.1"
+pelite = "0.10.0"
+futures-util = "0.3.31"
+stream-tungstenite = "0.6.1"
+tokio = "1.49.0"
+tokio-tungstenite = "0.28.0"
+paste = "1.0"
+steamworks-sys = "0.10.0"
+reqwest = { version = "0.13", features = ["json"] }
+memoffset = "0.5.4"
+bimap = "0.6.3"
+rand = "0.10.0"
+# For DS3
+dearxan = "0.5.3"
+chrono = "0.4.44"
+
+[dependencies.hudhook]
+git = "https://github.com/veeenu/hudhook"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+codegen-units = 1
+lto = true

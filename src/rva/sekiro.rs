@@ -1,0 +1,2 @@
+pub const DISPLAY_BOSS_HEALTHBAR_SDT: u32 = 0x67c7c0;
+pub const GET_MESSAGE_SDT: u32 = 0x2603620;
