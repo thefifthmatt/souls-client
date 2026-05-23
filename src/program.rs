@@ -112,7 +112,7 @@ fn current_module_path_string() -> Result<String, windows::core::Error> {
         module_handle
     };
 
-    // Approx. reasonable max length:
+    // Approx reasonable max length (per Dasaav...):
     // https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation
     let mut module_filename = vec![0u16; 32767];
 

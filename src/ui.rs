@@ -1,4 +1,4 @@
-use std::sync::{LazyLock, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -11,7 +11,12 @@ use hudhook::imgui::{Condition, Context, FontAtlas, FontId, FontSource, StyleVar
 use hudhook::{ImguiRenderLoop, hooks::dx12::ImguiDx12Hooks, Hudhook};
 use serde::{Serialize, Deserialize};
 
-use crate::items::ItemUpdater;
+use crate::client::{Client, ClientModule};
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct UiApiRequest {
+    ui: Option<UiRequest>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct UiRequest {
@@ -28,6 +33,8 @@ pub struct WidgetChannel {
     pub info: RwLock<Vec<String>>,
 }
 
+static INSTANCE: OnceLock<Arc<WidgetChannel>> = OnceLock::new();
+
 impl WidgetChannel {
     fn new() -> Self {
         let (toast_send, toast_recv) = mpsc::channel();
@@ -36,21 +43,29 @@ impl WidgetChannel {
     }
 
     pub fn get() -> &'static Self {
-        static INSTANCE: LazyLock<WidgetChannel> = LazyLock::new(|| WidgetChannel::new());
-        &INSTANCE
+        INSTANCE.get().expect("Accessed before initialization")
+    }
+
+    pub fn initialize() {
+        if INSTANCE.get().is_some() {
+            panic!("Already initialized");
+        }
+        let channel = Arc::new(WidgetChannel::new());
+        Widget::initialize();
+        Client::get().register_module(channel.clone());
+        INSTANCE.set(channel).ok().expect("Already initialized");
     }
 
     pub fn show_toast(&self, toast: &str) {
         let _ = self.toast_send.send(toast.to_string());
     }
 
-    pub fn handle_request(&self, req: &UiRequest) {
+    fn handle_request(&self, req: &UiRequest) {
         if let Some(toast) = &req.toast {
             self.show_toast(toast);
         }
         if let Some(timer) = &req.timer {
-            // Hijack this, maybe expand to general match state if there's more like this
-            ItemUpdater::get().set_infinite_arrows(timer != "");
+            // TODO: Set infinite arrows on match start. This was previously done here if timer != ""
             if timer == "" {
                 *self.timer.write().unwrap() = None;
             } else {
@@ -65,9 +80,20 @@ impl WidgetChannel {
         }
     }
 
+    // Called from ImGui loop
     fn recv(&self) -> Vec<String> {
         let recv = self.toast_recv.lock().unwrap();
         recv.try_iter().collect()
+    }
+}
+
+impl ClientModule for WidgetChannel {
+    fn handle_message(&self, json: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+        let api_req = UiApiRequest::deserialize(json)?;
+        if let Some(req) = &api_req.ui {
+            self.handle_request(req);
+        }
+        Ok(())
     }
 }
 
@@ -80,8 +106,9 @@ struct Fonts {
 unsafe impl Send for Fonts {}
 unsafe impl Sync for Fonts {}
 
+// This is the actual renderer, but it's kept internal to the channel as that's the public-facing interface
 #[derive(Default, Debug)]
-pub struct Widget
+struct Widget
 {
     toasts: Vec<(Instant, String)>,
     font: Option<Fonts>,
@@ -93,7 +120,7 @@ impl Widget {
         Default::default()
     }
 
-    pub fn initialize() {
+    fn initialize() {
         std::thread::spawn(|| {
             wait_for_system_init(&fromsoftware_shared::Program::current(), Duration::MAX)
                 .expect("Could not await system init.");

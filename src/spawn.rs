@@ -17,19 +17,25 @@ use eldenring::{
 use fromsoftware_shared::{F32Vector4, FromStatic, SharedTaskImpExt};
 use serde::{Deserialize, Serialize};
 
-use crate::arenas::MAIN_ARENAS;
-use crate::client::{Client, NameClaim};
-use crate::hooks::hook_spawn;
+use crate::spawn::arenas::MAIN_ARENAS;
+use crate::client::{Client, ClientModule};
+use crate::names::{NameClaim, NameClient};
 use crate::rva::{
-    GLOBAL_FIELD_AREA, NET_CHR_SYNC_SETUP_ENTITY_1, NET_CHR_SYNC_SETUP_ENTITY_2,
-    NET_CHR_SYNC_SETUP_ENTITY_3, REMOVE_CHR_INS, SPAWN_CHR,
+    GLOBAL_FIELD_AREA, NET_CHR_SYNC_SETUP_ENTITY_1, NET_CHR_SYNC_SETUP_ENTITY_2, NET_CHR_SYNC_SETUP_ENTITY_3, REMOVE_CHR_INS, SPAWN_CHR, SUMMON_BUDDY_CHRSET_ALLOC_SIZE, SUMMON_BUDDY_CHRSET_CAPACITY, SUMMON_BUDDY_CHRSET_MEMSET_SIZE
 };
 use crate::ui::WidgetChannel;
-use crate::{Program, event::emedf};
+use crate::{program::Program, event::emedf};
+
+mod arenas;
 
 // Must be >80 for health sync to work, also avoid seamless 127 torrents and buddies
 pub const CHR_SET_CAPACITY: u32 = 320; // 480 for bigger
 pub const CHR_SET_START: u32 = 160;  // 128 + 32
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct SpawnApiRequest {
+    spawn: Option<SpawnRequest>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct SpawnRequest {
@@ -68,32 +74,28 @@ pub struct EnemySpawner {
 static INSTANCE: OnceLock<Arc<EnemySpawner>> = OnceLock::new();
 
 impl EnemySpawner {
+    #[allow(unused)]
     pub fn get() -> &'static Self {
         INSTANCE.get().expect("Accessed before initialization")
     }
 
-    pub fn initialize(enable: bool) {
+    pub fn initialize() {
         if INSTANCE.get().is_some() {
             panic!("Already initialized");
         }
-        let spawner;
-        if enable {
-            let (spawn_send, spawn_recv) = mpsc::channel();
-            spawner = Arc::new(EnemySpawner {
-                spawn_send: Some(spawn_send),
-            });
-            let other = Arc::clone(&spawner);
-            std::thread::spawn(move || other.run_task(spawn_recv));
-            hook_spawn();
-        } else {
-            spawner = Arc::new(EnemySpawner {
-                spawn_send: None,
-            });
-        }
+        let (spawn_send, spawn_recv) = mpsc::channel();
+        let spawner = Arc::new(EnemySpawner {
+            spawn_send: Some(spawn_send),
+        });
+        let other = spawner.clone();
+        std::thread::spawn(move || other.run_task(spawn_recv));
+        // Delay only needed in DS3
+        hook_spawn();
+        Client::get().register_module(spawner.clone());
         INSTANCE.set(spawner).ok().expect("Already initialized");
     }
 
-    pub fn spawn_req(&self, item: &SpawnRequest) {
+    fn spawn_req(&self, item: &SpawnRequest) {
         // Convert everything to main request format
         if let Some(enemy) = &item.spawn {
             self.spawn_enemy(enemy.clone());
@@ -159,7 +161,6 @@ impl EnemySpawner {
         cs_task.run_recurring(
             move |_: &FD4TaskData| {
                 let (block_id, arena) = get_current_arena();
-                let client = Client::get();
 
                 'main: while let Ok(req) = spawn_recv.try_recv() {
                     // Check if loaded after consuming the request, to avoid mass-spawning when loading into such a map
@@ -191,7 +192,7 @@ impl EnemySpawner {
                         let claim = if first.is_none() { req.claim.clone() } else { None };
                         let claim = claim.unwrap_or_else(|| NameClaim::new("".to_string(), 0));
                         log::info!("Assigning {} -> {:?}", temp_entity_id, claim);
-                        client.set_spawn_name(temp_entity_id, claim);
+                        NameClient::get().set_spawn_name(temp_entity_id, claim);
                         match first {
                             None => {
                                 let _ = first.insert(chr_ins);
@@ -293,6 +294,16 @@ impl EnemySpawner {
     }
 }
 
+impl ClientModule for EnemySpawner {
+    fn handle_message(&self, json: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+        let req = SpawnApiRequest::deserialize(json)?;
+        if let Some(item) = &req.spawn {
+            self.spawn_req(&item);
+        }
+        Ok(())
+    }
+}
+
 fn get_current_arena() -> (Option<BlockId>, Option<Arena>) {
     let Ok(world_chr_man) = (unsafe { WorldChrMan::instance() }) else {
         return (None, None);
@@ -357,6 +368,29 @@ pub fn generate_field_ins_handle(index: u32) -> FieldInsHandle {
         block_id: BlockId::none(),
     };
     field_ins_handle
+}
+
+fn hook_spawn() {
+    let program = Program::current();
+    unsafe {
+        const CAP: u32 = CHR_SET_CAPACITY;
+        const SIZE: u32 = CAP * 0x10;
+        // Double buddy set
+        std::ptr::write_unaligned(
+            program.derva_ptr::<*mut u32>(SUMMON_BUDDY_CHRSET_ALLOC_SIZE),
+            SIZE,
+        );
+
+        std::ptr::write_unaligned(
+            program.derva_ptr::<*mut u32>(SUMMON_BUDDY_CHRSET_MEMSET_SIZE),
+            SIZE,
+        );
+
+        std::ptr::write_unaligned(
+            program.derva_ptr::<*mut u32>(SUMMON_BUDDY_CHRSET_CAPACITY),
+            CAP,
+        );
+    }
 }
 
 pub fn spawn_mob(

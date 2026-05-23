@@ -12,12 +12,11 @@ use serde::{Deserialize, Serialize};
 pub mod data;
 pub mod equip;
 
-use crate::client::Client;
+use crate::client::{Client, ClientModule, CommonRequest};
 use crate::game::PlayerGameDataExt;
-use crate::items::data::UpgradeType;
-use crate::items::equip::{EquipHandler, EquipStatus};
 use crate::{
-    items::data::ItemData,
+    items::data::{ItemData, UpgradeType},
+    items::equip::{EquipHandler, EquipStatus},
 };
 
 pub struct ItemUpdater {
@@ -27,6 +26,25 @@ pub struct ItemUpdater {
     // Keyed by base id
     pending: Mutex<HashMap<ItemId, PendingEquip>>,
     equip_handler: Mutex<EquipHandler>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct ItemApiRequest {
+    #[serde(flatten)]
+    common: CommonRequest,
+    item: Option<ItemRequest>,
+    item_commands: Option<Vec<ItemCommand>>,
+}
+
+// Misc control commands
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+enum ItemCommand {
+    // Item
+    #[serde(rename = "dump_items")]
+    DumpItems,
+    #[serde(rename = "infinite_arrows")]
+    InfiniteArrows { enabled: bool },
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -58,6 +76,7 @@ struct PendingEquip {
 static INSTANCE: OnceLock<Arc<ItemUpdater>> = OnceLock::new();
 
 impl ItemUpdater {
+    #[allow(unused)]
     pub fn get() -> &'static Self {
         INSTANCE.get().expect("Accessed before initialization")
     }
@@ -73,10 +92,11 @@ impl ItemUpdater {
             pending: Mutex::new(HashMap::new()),
             equip_handler: Mutex::new(EquipHandler::default()),
         });
-        let other = Arc::clone(&updater);
+        let other = updater.clone();
         std::thread::spawn(move || other.load_data());
-        let other = Arc::clone(&updater);
+        let other = updater.clone();
         std::thread::spawn(move || other.run_task(item_recv));
+        Client::get().register_module(updater.clone());
         INSTANCE.set(updater).ok().expect("Already initialized");
     }
 
@@ -244,4 +264,28 @@ impl ItemUpdater {
         );
     }
 
+}
+
+impl ClientModule for ItemUpdater {
+    fn handle_message(&self, json: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+        let req = ItemApiRequest::deserialize(json)?;
+        let client = Client::get();
+        // Player id filtering can applies to item operations
+        let excluded = req.common.player.as_deref().is_some_and(|p| p != client.unique_id);
+        if let Some(item) = &req.item && !excluded { 
+            // Maybe send back error response to server, rate limited. Or imgui it
+            self.give(item)?;
+        }
+        for command in req.item_commands.iter().flatten() {
+            match command {
+                ItemCommand::DumpItems => self.dump_items()?,
+                ItemCommand::InfiniteArrows { enabled } => {
+                    if !excluded {
+                        self.set_infinite_arrows(*enabled);
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
 }

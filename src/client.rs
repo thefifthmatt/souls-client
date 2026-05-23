@@ -1,6 +1,10 @@
-use std::{collections::HashMap, sync::{Arc, OnceLock, RwLock}};
-use rand::distr::weighted::WeightedIndex;
-use rand::distr::Distribution;
+use std::sync::{Arc, OnceLock, RwLock};
+use eldenring::{
+    cs::{CSTaskGroupIndex, PlayerGameData, CSTaskImp},
+    fd4::FD4TaskData,
+    util::system::wait_for_system_init
+};
+use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 
 use tokio::{sync::{Notify, mpsc}, time::{Duration, sleep}};
 use tokio_tungstenite::{connect_async, tungstenite::{client::IntoClientRequest, protocol::Message}};
@@ -8,301 +12,45 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Serialize, Deserialize};
 
 use crate::{
-    game::FromGame,
-    items::{ItemRequest, ItemUpdater},
-    name_templates::{DS1R_ENTITY_ID_TEMPLATES, DS3_ENTITY_ID_TEMPLATES, ER_ENTITY_ID_TEMPLATES, SDT_ENTITY_ID_TEMPLATES},
-    spawn::{EnemySpawner, SpawnRequest}, ui::{UiRequest, WidgetChannel}
+    game::{FromGame, PlayerGameDataExt},
 };
 
-// Mainly state that is used by hooks
-#[derive(Default, Debug)]
-pub struct ClientState {
-    name_mode: NameMode,
-    player_name: String,
-    name_claims: Vec<NameClaim>,
-    // If empty or [0], select top.
-    // If [a, b, c], select top >= c, otherwise select weighted between [b, c), otherwise [a, b)
-    tiers: Vec<u32>,
-    healthbar_rewrites: HashMap<HealthbarKey, HealthbarRewrite>,
-    msg_to_entity_id: HashMap<i32, u32>,
-    // Also for spawn requests
-    // Also display state for timer, top names, etc
+pub trait StreamRequest: Send + erased_serde::Serialize {}
+erased_serde::serialize_trait_object!(StreamRequest);
+
+pub trait ApiPostRequest: Send + erased_serde::Serialize {
+    fn url(&self) -> &'static str;
+}
+erased_serde::serialize_trait_object!(ApiPostRequest);
+
+pub trait ClientModule: Send + Sync {
+    // Process websocket message. This is sent to all modules, so deserialization should not be incompatible
+    // between different modules. Different modules should use different field names (aside from CommonRequest).
+    // This could be validated with serde_fields.
+    fn handle_message(&self, json: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>>;
+    // Memory edits which may need to wait until after Arxan is disabled
+    fn hook(&self) {}
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-// #[serde(tag = "type")]
-pub enum NameMode {
-    #[serde(rename = "none")]
-    None,
-    #[serde(rename = "test")]
-    Test,
-    #[default]
-    #[serde(rename = "cache")]
-    Cache,
-    #[serde(rename = "fresh")]
-    Fresh,
-}
-
-pub const SPAWN_NAME_ID: i32 = 10104137;
-
-impl ClientState {
-    pub fn update(&mut self, req: &Request) {
-        for command in req.commands() {
-            log::info!("Processing {:?}", command);
-            match command {
-                Command::SetNameMode { mode } => { 
-                    let mode = *mode;
-                    // Only keep on chnage mode if going to cached
-                    if mode == NameMode::Fresh && mode == NameMode::Cache {
-                        self.clear_cached_names();
-                    }
-                    self.name_mode = mode;
-                },
-                Command::SetTiers { tiers } => {
-                    let mut tiers = tiers.clone();
-                    tiers.sort();
-                    self.tiers = tiers;
-                }
-                Command::ClearNameCache => {
-                    // Assume this accompanies getting fresh claims
-                    self.clear_cached_names();
-                    self.name_claims.clear();
-                }
-                // Others handled in handling client message
-                _ => (),
-            }
-        }
-        if let Some(claims) = &req.claims {
-            // Continue adding claims regardless of mode
-            let mut updated = 0;
-            for claim in claims {
-                match self.name_claims.iter_mut().find(|c| c.name == claim.name) {
-                    Some(exist_claim) => {
-                        exist_claim.amount = claim.amount;
-                        exist_claim.ignore = claim.ignore;
-                        exist_claim.claimed = false;
-                    }
-                    None => {
-                        self.name_claims.push(claim.clone());
-                        updated += 1;
-                    }
-                }
-            }
-            if updated > 0 { log::info!("Claims: Added {}", updated); }
-        }
-    }
-
-    fn top_claim_mut(&mut self) -> Option<&mut NameClaim> {
-        // Above top amount, select top. Can set really high to prevent this
-        let min_for_top = self.tiers.last().copied().unwrap_or(0);
-        // iter_mut is pretty inconvenient as it takes ownership away, do this immutably for now
-        let top = self.name_claims.iter()
-            .filter(|c| c.is_usable() && c.amount >= min_for_top)
-            .max_by_key(|c| c.amount)
-            .map(|c| c.name.clone());
-        if let Some(select) = top {
-            return self.name_claims.iter_mut().find(|c| c.name == select);
-        }
-        for window in self.tiers.windows(2).rev() {
-            let min = window[0];
-            let max = window[1];
-            let range_claims: Vec<&NameClaim> = self.name_claims.iter()
-                .filter(|c| c.is_usable() && c.amount >= min && c.amount < max)
-                .collect();
-            if !range_claims.is_empty() {
-                let weights: Vec<u32> = range_claims.iter().map(|c| c.amount).collect();
-                let dist = WeightedIndex::new(&weights).unwrap();
-                let mut rng = rand::rng();
-                let index = dist.sample(&mut rng);
-                // There's probably a way to do ownership correctly but keep it simple here
-                let select = range_claims[index].name.clone();
-                return self.name_claims.iter_mut().find(|c| c.name == select);
-            }
-        }
-        None
-    }
-
-    fn healthbar_key(&self, entity_id: u32, msg_id: i32) -> HealthbarKey {
-        if msg_id == SPAWN_NAME_ID { HealthbarKey::EntityId(entity_id) } else { HealthbarKey::MsgId(msg_id) }
-    }
-
-    fn get_msg_boss(&self, entity_id: u32, msg_id: i32) -> Option<u32> {
-        if entity_id > 0 {
-            Some(entity_id)
-        } else if let Some(&boss_id) = self.msg_to_entity_id.get(&msg_id) {
-            Some(boss_id)
-        } else {
-            None
-        }
-    }
-
-    fn set_msg_boss(&mut self, entity_id: u32, msg_id: i32) {
-        self.msg_to_entity_id.insert(msg_id, entity_id);
-        log::info!("Healthbar {} {} in {:?}", entity_id, msg_id, self.name_mode);
-        if self.name_mode == NameMode::Fresh {
-            self.healthbar_rewrites.remove(&HealthbarKey::MsgId(msg_id));
-        }
-    }
-    
-    fn clear_cached_names(&mut self) {
-        // Remove all FMG messages
-        self.healthbar_rewrites.retain(|key, _| matches!(key, HealthbarKey::EntityId(_)));
-    }
-
-    // This can probably be encapsulated in make_claim?
-    fn get_healthbar_rewrite(&self, entity_id: u32, msg_id: i32) -> Option<&HealthbarRewrite> {
-        let key = self.healthbar_key(entity_id, msg_id);
-        self.healthbar_rewrites.get(&key)
-    }
-
-    pub fn set_spawn_name(&mut self, entity_id: u32, claim: NameClaim) {
-        let key = HealthbarKey::EntityId(entity_id);
-        let name = claim.name.to_string();
-        let rewrite = HealthbarRewrite { claim: claim, name: name, update: false };
-        self.healthbar_rewrites.insert(key, rewrite);
-    }
-
-    // Makes a new claim if possible, mutating the healthbar map and returning the consumed claim
-    pub fn make_claim(&mut self, entity_id: u32, msg_id: i32, game: FromGame) -> Option<&HealthbarRewrite> {
-        let key = self.healthbar_key(entity_id, msg_id);
-        if let HealthbarKey::EntityId(_) = &key {
-            return self.healthbar_rewrites.get(&key);
-        }
-        // None mode still allows spawn names
-        if self.name_mode == NameMode::None {
-            return None;
-        }
-        // Other cases use template
-        let templates = match game {
-            FromGame::DS1R => &DS1R_ENTITY_ID_TEMPLATES,
-            FromGame::DS3 => &DS3_ENTITY_ID_TEMPLATES,
-            FromGame::SDT => &SDT_ENTITY_ID_TEMPLATES,
-            FromGame::ER => &ER_ENTITY_ID_TEMPLATES,
-        };
-        let mut template = match templates.get(&entity_id) {
-            Some(template) => template,
-            None => {
-                if game == FromGame::ER && (entity_id / 100) % 10 != 8 {
-                    return None;
-                }
-                &"$1"
-            },
-        };
-        // In specific case of vanilla Malenia, set template
-        if entity_id == 15000800 && msg_id == 902120001 {
-            template = &"$1, Goddess of Rot";
-        }
-        let claim;
-        let test;
-        if self.name_mode == NameMode::Test {
-            static COUNT: std::sync::Mutex<u32> = std::sync::Mutex::new(1);
-            let mut count = COUNT.lock().unwrap();
-            claim = NameClaim { name: format!("[{}-{} #{}]", entity_id, msg_id, *count), ..Default::default() };
-            *count += 1;
-            test = true;
-        } else {
-            let Some(top_claim) = self.top_claim_mut() else {
-                return None;
-            };
-            top_claim.claimed = true;
-            top_claim.amount = 0;
-            claim = top_claim.clone();
-            test = false;
-        }
-        let enemy_name = template.replace("$1", &claim.name);
-        let rewrite = HealthbarRewrite { claim: claim, name: enemy_name, update: !test };
-        // Some(self.healthbar_rewrites.entry(key).or_insert_with(|| rewrite.into()))
-        self.healthbar_rewrites.insert(key.clone(), rewrite);
-        self.healthbar_rewrites.get(&key)
-    }
-}
-
+// Request fields shared by multiple modules which can be inserted into other requests using #[serde(flatten)]
+#[allow(unused)]
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
-pub struct NameClaim {
-    pub name: String,
-    pub amount: u32,
-    #[serde(default)]
-    pub ignore: bool,
-    // Use to avoid locally
-    #[serde(skip)]
-    claimed: bool,
-}
-
-impl NameClaim {
-    pub fn new(name: String, amount: u32) -> Self {
-        Self { name: name, amount: amount, ..Default::default() }
-    }
-
-    pub fn is_usable(&self) -> bool {
-        self.amount > 0 && !self.ignore
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum HealthbarKey {
-    EntityId(u32),
-    MsgId(i32),
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct HealthbarRewrite {
-    // claim at the time the rewrite was added
-    claim: NameClaim,
-    name: String,
-    update: bool,
-}
-
-#[derive(Serialize, Deserialize, Clone, Default, Debug)]
-pub struct Request {
+pub struct CommonRequest {
     // For in-game interactions, filter for local id
-    player: Option<String>,
-    spawn: Option<SpawnRequest>,
-    ui: Option<UiRequest>,
-    claims: Option<Vec<NameClaim>>,
-    item: Option<ItemRequest>,
-    // This is convenient for manual things, maybe switch in the future
-    command: Option<Command>,
-    commands: Option<Vec<Command>>,
+    pub player: Option<String>,
 }
 
-impl Request {
-    fn commands(&self) -> Vec<&Command> {
-        match &self.commands {
-            Some(commands) => match &self.command {
-                Some(command) => commands.iter().chain([command]).collect(),
-                None => commands.iter().collect(),
-            }
-            None => self.command.iter().collect(),
-        }
-    }
-}
-
+// Request object for server interactions. Currently not used in favor of CoreStreamRequest.
+#[allow(unused)]
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 struct PlayerName {
     id: String,
     name: String,
 }
 
-// Misc control commands
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(tag = "type")]
-enum Command {
-    #[serde(rename = "dump_items")]
-    DumpItems,
-    #[serde(rename = "infinite_arrows")]
-    InfiniteArrows { enabled: bool },
-    #[serde(rename = "set_name_mode")]
-    SetNameMode { mode: NameMode },
-    #[serde(rename = "set_tiers")]
-    SetTiers { tiers: Vec<u32> },
-    #[serde(rename = "clear_name_cache")]
-    ClearNameCache,
-}
-
-#[derive(Clone, Debug)]
-enum ApiRequest {
-    MakeClaim(NameClaim),
-    SetPlayer(String),
+impl ApiPostRequest for PlayerName {
+    fn url(&self) -> &'static str { "/api/players" }
+    // fn to_json(&self) -> Result<serde_json::Value, serde_json::Error> { serde_json::to_value(self) }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -318,20 +66,21 @@ struct LoginResponse {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
-enum StreamRequest {
+enum CoreStreamRequest {
     #[serde(rename = "set_player")]
-    SetPlayer(String),
+    SetPlayer { name: String },
 }
+impl StreamRequest for CoreStreamRequest {}
 
 pub struct Client {
     host: String,
-    unique_id: String,
-    game: FromGame,
+    pub unique_id: String,
+    pub game: FromGame,
+    player_name: RwLock<String>,
+    modules: RwLock<Vec<Arc<dyn ClientModule>>>,
     start: Notify,
-    state: RwLock<ClientState>,
-    api_send: mpsc::Sender<ApiRequest>,
-    #[allow(unused)]
-    stream_send: mpsc::Sender<StreamRequest>,
+    api_send: mpsc::Sender<Box<dyn ApiPostRequest>>,
+    stream_send: mpsc::Sender<Box<dyn StreamRequest>>,
 }
 
 static INSTANCE: OnceLock<Arc<Client>> = OnceLock::new();
@@ -339,6 +88,12 @@ static INSTANCE: OnceLock<Arc<Client>> = OnceLock::new();
 impl Client {
     pub fn get() -> &'static Self {
         INSTANCE.get().expect("Accessed before initialization")
+    }
+
+    #[allow(unused)]
+    pub fn register_module(&self, module: Arc<dyn ClientModule>) {
+        let mut modules = self.modules.write().unwrap();
+        modules.push(module);
     }
 
     pub fn initialize(host: &str, unique_id: &str, game: FromGame) {
@@ -351,14 +106,17 @@ impl Client {
             // localhost:8080 locally
             host: host.to_string(),
             unique_id: unique_id.to_string(),
+            player_name: RwLock::new(String::default()),
+            modules: RwLock::new(Vec::new()),
             game: game,
             start: Notify::new(),
-            state: RwLock::new(ClientState::default()),
             api_send: api_send,
             stream_send: stream_send,
         });
-        let other = Arc::clone(&client);
+        let other = client.clone();
         std::thread::spawn(move || other.receive_messages(api_recv, stream_recv));
+        let other = client.clone();
+        std::thread::spawn(move || other.run_task());
         INSTANCE.set(client).ok().expect("Already initialized");
     }
 
@@ -366,37 +124,16 @@ impl Client {
         self.start.notify_one();
     }
 
-    // Probably best to encapsulate this, though state_mut taking FnOnce(&mut ClientState)
-    pub fn set_spawn_name(&self, entity_id: u32, claim: NameClaim) {
-        let mut state = self.state.write().unwrap();
-        state.set_spawn_name(entity_id, claim);
+    // This sends a request as fire-and-forget, which is generally required during game logic.
+    // To actually wait for a response, a different method would need to be devised.
+    #[allow(unused)]
+    pub fn api_post(&self, req: impl ApiPostRequest + 'static) {
+        // Will typically only fail when queue full
+        let _ = self.api_send.try_send(Box::new(req));
     }
 
-    pub fn set_msg_boss(&self, entity_id: u32, msg_id: i32) {
-        let mut state = self.state.write().unwrap();
-        state.set_msg_boss(entity_id, msg_id);
-    }
-
-    pub fn claim_name(&self, entity_id: u32, msg_id: i32) -> Option<String> {
-        let mut state = self.state.write().unwrap();
-        let Some(entity_id) = state.get_msg_boss(entity_id, msg_id) else {
-            return None;
-        };
-        // Look up from cache
-        if let Some(rewrite) = state.get_healthbar_rewrite(entity_id, msg_id) {
-            return Some(rewrite.name.to_string());
-        }
-        let Some(rewrite) = state.make_claim(entity_id, msg_id, self.game) else {
-            // log::info!("claim failed {} {}", entity_id, msg_id);
-            return None;
-        };
-        // This includes prev_amount, though maybe ignore that in the server
-        let claim = rewrite.claim.clone();
-        if rewrite.update {
-            // Fire and forget, it's fine. Possible race condition the set, but the caller is single-threaded at least
-            let _ = self.api_send.try_send(ApiRequest::MakeClaim(claim));
-        }
-        Some(rewrite.name.to_string())
+    pub fn stream_send(&self, req: impl StreamRequest + 'static) {
+        let _ = self.stream_send.try_send(Box::new(req));
     }
 
     pub fn set_player(&self, name: &str) {
@@ -404,59 +141,34 @@ impl Client {
         if name.is_empty() {
             return;
         }
-        let mut state = self.state.write().unwrap();
-        if name != state.player_name {
-            state.player_name = name.to_string();
-            let _ = self.api_send.try_send(ApiRequest::SetPlayer(name.to_string()));
+        let mut stored_name = self.player_name.write().unwrap();
+        if name != *stored_name {
+            *stored_name = name.to_string();
+            // let _ = self.api_send.try_send(ApiRequest::SetPlayer(name.to_string()));
+            self.stream_send(CoreStreamRequest::SetPlayer { name: name.to_string() });
+        }
+    }
+
+    pub fn hook(&self) {
+        for module in self.modules.read().unwrap().iter() {
+            module.hook();
         }
     }
 
     fn connect(&self) {
-        let state = self.state.write().unwrap();
-        if !state.player_name.is_empty() {
-            let _ = self.api_send.try_send(ApiRequest::SetPlayer(state.player_name.to_string()));
+        // This can probably be done in loop directly?
+        let name = self.player_name.read().unwrap();
+        if !name.is_empty() {
+            // let _ = self.api_send.try_send(ApiRequest::SetPlayer(name.to_string()));
+            self.stream_send(CoreStreamRequest::SetPlayer { name: name.to_string() });
         }
     }
 
-    fn handle_message(&self, req: &Request) {
-        {
-            let mut state = self.state.write().unwrap();
-            state.update(req);
-        }
-        // The rest is only Elden Ring
-        if self.game != FromGame::ER {
-            return;
-        }
-        if let Some(spawn) = &req.spawn {
-            EnemySpawner::get().spawn_req(spawn);
-        }
-        let mut excluded = false;
-        // Fix me
-        if let Some(select) = &req.player && select != &self.unique_id {
-            excluded = true;
-        }
-        if let Some(ui) = &req.ui {
-            WidgetChannel::get().handle_request(ui);
-        }
-        if let Some(item) = &req.item {
-            // Do name/id filtering for items
-            if excluded {
-                return;
-            }
-            // Maybe send back error response, rate limited. Or imgui it
-            if let Err(e) = ItemUpdater::get().give(item) {
-                log::error!("Couldn't equip item: {}", e);
-            }
-        }
-        for command in req.commands() {
-            match command {
-                Command::DumpItems => ItemUpdater::get().dump_items().unwrap(),
-                Command::InfiniteArrows { enabled } => {
-                    if !excluded {
-                        ItemUpdater::get().set_infinite_arrows(*enabled);
-                    }
-                },
-                // Others handled in client state update
+    // No error handling currently...
+    fn handle_message(&self, json: &serde_json::Value) {
+        for module in self.modules.read().unwrap().iter() {
+            match module.handle_message(json) {
+                Err(e) => log::error!("handle_message failed: {e}"),
                 _ => (),
             }
         }
@@ -473,7 +185,10 @@ impl Client {
     }
 
     #[tokio::main]
-    async fn receive_messages(&self, mut api_recv: mpsc::Receiver<ApiRequest>, mut stream_recv: mpsc::Receiver<StreamRequest>) {
+    async fn receive_messages(
+            &self,
+            mut api_recv: mpsc::Receiver<Box<dyn ApiPostRequest>>,
+            mut stream_recv: mpsc::Receiver<Box<dyn StreamRequest>>) {
         // First wait for all dependencies to be set up
         self.start.notified().await;
 
@@ -516,29 +231,12 @@ impl Client {
             let client = Client::get();
             // let http_client = Arc::new(http_client);
             while let Some(req) = api_recv.recv().await {
-                log::info!("-> Sending {:?}", req);
+                log::info!("-> Sending {:?}", serde_json::to_string(&req));
                 let req_client = http_client.clone();
                 let api_auth = auth.clone();
-                match req {
-                    ApiRequest::MakeClaim(claim) => {
-                        tokio::spawn(async move {
-                            // https://stackoverflow.com/questions/73895393/how-to-cheaply-send-a-delay-message
-                            // We're forking anyway for parallelism. Actually nvm
-                            // tokio::time::sleep(Duration::from_secs(1)).await;
-                            let url = format!("{}/api/claims", client.get_http_base());
-                            let res = req_client.post(&url).json(&claim).header("Authorization", api_auth.to_string()).send().await;
-                            Self::log_error(&url, &res);
-                        });
-                    },
-                    ApiRequest::SetPlayer(player) => {
-                        tokio::spawn(async move {
-                            let url = format!("{}/api/players", client.get_http_base());
-                            let req = PlayerName { id: client.unique_id.to_string(), name: player };
-                            let res = req_client.post(&url).json(&req).header("Authorization", api_auth.to_string()).send().await;
-                            Self::log_error(&url, &res);
-                        });
-                    },
-                };
+                let url = format!("{}/{}", client.get_http_base(), req.url());
+                let res = req_client.post(&url).json(&req).header("Authorization", api_auth.to_string()).send().await;
+                Self::log_error(&url, &res);
             }
             log::error!("API processor ran out of queue");
         });
@@ -572,7 +270,7 @@ impl Client {
                                     Ok(message) => {
                                         if !message.is_ping() && let Ok(text) = message.into_text() {
                                             log::info!("Received {text}");
-                                            match serde_json::from_str::<Request>(&text) {
+                                            match serde_json::from_str::<serde_json::Value>(&text) {
                                                 Ok(msg) => self.handle_message(&msg),
                                                 Err(e) => log::error!("Failed to parse: {e}"),
                                             }
@@ -585,7 +283,8 @@ impl Client {
                                 }
                             },
                             Some(data) = stream_recv.recv() => {
-                                // Use client if any state is needed
+                                // Currently, message requests are client-internal, but this could accept
+                                // an arbitrary JSON value if needed.
                                 if let Ok(text) = serde_json::to_string(&data) {
                                     if let Err(e) = sink.send(Message::from(text)).await {
                                         log::error!("Failed to send: {e}");
@@ -615,6 +314,30 @@ impl Client {
             }
             _ => (),
         };
+    }
+
+    fn run_task(self: Arc<Self>) {
+        // Currently Elden Ring only
+        if self.game != FromGame::ER {
+            return;
+        }
+
+        wait_for_system_init(&fromsoftware_shared::Program::current(), Duration::MAX)
+            .expect("Could not await system init.");
+        // Needed without modloader
+        std::thread::sleep(Duration::from_secs(3));
+
+        let cs_task = unsafe { CSTaskImp::instance().expect("Task system not initialized") };
+        cs_task.run_recurring(move
+            |_: &FD4TaskData| {
+                let client = Client::get();
+                if let Some(player_game_data) = unsafe { PlayerGameData::main_instance() } {
+                    client.set_player(&player_game_data.character_name());
+                }
+            },
+            // Idk
+            CSTaskGroupIndex::HavokWorldUpdate_Pre,
+        );
     }
 }
 

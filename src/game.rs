@@ -2,7 +2,6 @@ use std::hash::{Hasher, DefaultHasher};
 
 use eldenring::cs::{GameDataMan, PlayerGameData};
 use fromsoftware_shared::FromStatic;
-use rand::RngExt;
 
 pub trait PlayerGameDataExt {
     unsafe fn main_instance() -> Option<&'static mut Self>;
@@ -29,20 +28,18 @@ pub enum FromGame {
     ER,
 }
 
-pub fn get_game_hash(random: bool) -> String {
-    let steam_id = get_steam_id();
+pub fn get_game_hash() -> String {
+    // Select either Steam id or random number (resets every game restart) based on feature.
+    // Using both would also be possible.
+    let game_id = get_game_id();
     let mut hasher = DefaultHasher::new();
-    if random {
-        let mut rng = rand::rng();
-        hasher.write_u32(rng.random::<u32>())
-    }
-    hasher.write_u64(steam_id);
+    hasher.write_u64(game_id);
     let hash = hasher.finish();
     format!("{:04x}", hash & 0xFFFF)
 }
 
-#[cfg(false)]
-pub fn get_steam_id() -> u64 {
+#[cfg(feature = "eldenring")]
+pub fn get_game_id() -> u64 {
     // To be safe, steam dll with these functions must be loaded. True for Elden Ring 1.16.1 at least.
     // The failure will happen when loading the dll, long before here.
     unsafe {
@@ -51,7 +48,8 @@ pub fn get_steam_id() -> u64 {
     }
 }
 
-#[cfg(true)]
-pub fn get_steam_id() -> u64 {
-    0
+#[cfg(not(feature = "eldenring"))]
+pub fn get_game_id() -> u64 {
+    let mut rng = rand::rng();
+    rand::RngExt::random::<u64>(&mut rng)
 }

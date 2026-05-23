@@ -7,6 +7,8 @@ use windows::{
     core::{PCWSTR, w},
 };
 
+use crate::program::current_module_path;
+
 const LOG_FILE: &str = "souls_client.log";
 
 pub fn init() {
@@ -19,7 +21,9 @@ pub fn init() {
 
 pub fn try_init() -> eyre::Result<()> {
     // let _ = File::options().write(true).truncate(true).open(LOG_FILE);
-    let log_file = File::options().append(true).create(true).open(LOG_FILE)?;
+    let mut log_path = current_module_path();
+    log_path.set_file_name(LOG_FILE);
+    let log_file = File::options().append(true).create(true).open(log_path)?;
 
     WriteLogger::init(
         // LevelFilter::Debug,

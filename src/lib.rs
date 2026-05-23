@@ -1,23 +1,29 @@
-use std::{ffi::c_void, path::Path};
-
+use std::ffi::c_void;
 use windows::{
     Win32::{Foundation::HINSTANCE, System::SystemServices::DLL_PROCESS_ATTACH},
     core::BOOL,
 };
 
-use crate::{client::Client, game::FromGame, hooks::hook_messages, items::ItemUpdater, program::{Program, current_module_path}, spawn::EnemySpawner, ui::Widget};
+use crate::{
+    client::Client,
+    game::FromGame,
+};
 
-mod arenas;
 mod client;
 mod event;
 mod game;
 mod hooks;
-mod items;
 mod logger;
-mod name_templates;
 mod program;
 mod rva;
+
+#[cfg(feature = "items")]
+mod items;
+#[cfg(feature = "names")]
+mod names;
+#[cfg(feature = "spawn")]
 mod spawn;
+#[cfg(feature = "ui")]
 mod ui;
 
 fn main() -> eyre::Result<()> {
@@ -32,38 +38,35 @@ fn main() -> eyre::Result<()> {
         _ => panic!("Unknown game {} version {} found with dll mod", product, version),
     };
 
-    // For cross-game compatibility this is just a random number
-    let unique_id = crate::game::get_game_hash(true);
+    let unique_id = crate::game::get_game_hash();
 
     let local = true;
     let host = if local { "localhost:3000" } else { panic!("Remote host not configured") };
     Client::initialize(host, &unique_id, game);
 
+    #[cfg(feature = "names")]
+    crate::names::NameClient::initialize();
+
     if game == FromGame::ER {
-        // For now, use presence of spawn file for a bunch of features
-        let mut spawn_file = current_module_path();
-        spawn_file.set_file_name("spawn.txt");
-        let advanced = Path::exists(&spawn_file);
-        if !advanced {
-            log::info!("{:?} not found, so disabling spawn and UI", spawn_file);
-        }
-        EnemySpawner::initialize(advanced);
-        ItemUpdater::initialize();
-        if advanced {
-            Widget::initialize();
-        }
+        #[cfg(feature = "ui")]
+        crate::ui::WidgetChannel::initialize();
+        #[cfg(feature = "items")]
+        crate::items::ItemUpdater::initialize();
+        #[cfg(feature = "spawn")]
+        crate::spawn::EnemySpawner::initialize();
     }
-    if game == FromGame::DS3 {
-        // Rely on patch fix for DS1R since neuter_arxan seems to be too slow at startup
+    if game == FromGame::DS3 && cfg!(feature = "ds3") {
+        // Rely on patch fix for DS1R instead since neuter_arxan seems to be too slow at startup
+        #[cfg(feature = "ds3")]
         unsafe {
             dearxan::disabler::neuter_arxan(move |result| {
                 log::info!("Dearxan result: {:?}", result);
-                hook_messages(game);
+                Client::get().hook();
             });
         }
     } else {
         std::thread::spawn(move || {
-            hook_messages(game);
+            Client::get().hook();
         });
     }
 
@@ -78,7 +81,7 @@ unsafe extern "system" fn DllMain(_inst: HINSTANCE, reason: u32, _: *mut c_void)
         logger::init();
         logger::set_panic_hook();
 
-        #[cfg(false)]
+        // #[cfg(false)]
         if libhotpatch::is_hotpatched() {
             return true.into();
         }
@@ -88,3 +91,9 @@ unsafe extern "system" fn DllMain(_inst: HINSTANCE, reason: u32, _: *mut c_void)
 
     true.into()
 }
+
+// Awkward dependencies for unused_crate_dependencies
+use rand as _;
+
+#[cfg(test)]
+use memoffset as _;
