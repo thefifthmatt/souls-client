@@ -316,7 +316,7 @@ fn get_current_arena() -> (Option<BlockId>, Option<Arena>) {
         // Experimental mode to spawn on the fly, should ideally be specified in request
         // Without this the spawn is ignored
         let pos = player.block_position;
-        let orientation = player.module_container.physics.orientation_euler.1;
+        let orientation = player.modules.physics.orientation_euler.1;
         Some(Arena::new_for_test("Player", block_id, pos, orientation))
     });
     (Some(block_id), arena)
@@ -607,7 +607,7 @@ pub fn buddy_spawn() {
 pub fn debug_spawn() {
     static ENTITY_ID: Mutex<i32> = Mutex::new(460280000);
 
-    let Ok(world_chr_man) = (unsafe { WorldChrMan::instance() }) else {
+    let Ok(world_chr_man) = (unsafe { WorldChrMan::instance_mut() }) else {
         return;
     };
     let Some(player) = world_chr_man.main_player.as_ref() else {
@@ -621,7 +621,7 @@ pub fn debug_spawn() {
         *current_id += 1;
     }
 
-    let pos = player.module_container.physics.position;
+    let pos = player.modules.physics.position;
     world_chr_man.spawn_debug_character(&ChrDebugSpawnRequest {
         chr_id: 2275,
         chara_init_param_id: -1,

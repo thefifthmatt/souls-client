@@ -140,7 +140,7 @@ impl ItemUpdater {
     }
 
     pub fn set_infinite_arrows(&self, enabled: bool) {
-        if let Ok(debug_flags) = unsafe { WorldChrManDbgFlags::instance() } {
+        if let Ok(debug_flags) = unsafe { WorldChrManDbgFlags::instance_mut() } {
             debug_flags.all_no_arrow_consume = enabled;
         }
     }

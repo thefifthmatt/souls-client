@@ -168,7 +168,7 @@ unsafe fn display_boss_healthbar_override_er(entity_id: NonNull<u32>, msg_id: i3
         let chr_ins = unsafe { chr_ins.as_ref() };
         let mut entity_id = chr_ins.event_entity_id;
         if !ER_ENTITY_ID_TEMPLATES.contains_key(&entity_id) {
-            if let Some(part_data) = chr_ins.module_container.data.msb_parts.msb_part {
+            if let Some(part_data) = chr_ins.modules.data.msb_parts.msb_part {
                 let part_data = unsafe { part_data.as_ref() };
                 let common_data = unsafe { part_data.common.as_ref() };
                 for group_id in common_data.entity_group_ids {

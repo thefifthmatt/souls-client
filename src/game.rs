@@ -1,4 +1,4 @@
-use std::hash::{Hasher, DefaultHasher};
+use std::{hash::{DefaultHasher, Hasher}, ops::DerefMut};
 
 use eldenring::cs::{GameDataMan, PlayerGameData};
 use fromsoftware_shared::FromStatic;
@@ -11,7 +11,7 @@ pub trait PlayerGameDataExt {
 
 impl PlayerGameDataExt for PlayerGameData {
     unsafe fn main_instance() -> Option<&'static mut PlayerGameData> {
-        unsafe { GameDataMan::instance() }.ok().map(|game| game.main_player_game_data.as_mut())
+        unsafe { GameDataMan::instance_mut() }.ok().map(|game| game.main_player_game_data.deref_mut())
     }
 
     fn character_name(&self) -> String {

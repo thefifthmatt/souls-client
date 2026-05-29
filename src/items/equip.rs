@@ -160,7 +160,7 @@ fn get_equipped_physick_ids(player_game_data: &PlayerGameData) -> Vec<OptionalIt
 
 fn clear_action_flag(player: &mut PlayerIns) {
     // At 0x10, set 1
-    let anim_flag = &mut player.module_container.action_flag.animation_action_flags;
+    let anim_flag = &mut player.modules.action_flag.animation_action_flags;
     anim_flag.set_stay_state(true);
     // At ctrl 0x18 + 0x8, set 1 and clear 0x10
     let menu_ctrl = unsafe { player.player_menu_ctrl.as_mut() };
@@ -331,7 +331,7 @@ impl EquipHandler {
             return EquipStatus::Done;
         };
         // Actual equip
-        if let Ok(world_chr_man) = unsafe { WorldChrMan::instance() }
+        if let Ok(world_chr_man) = unsafe { WorldChrMan::instance_mut() }
             && let Some(main_player) = &mut world_chr_man.main_player {
             clear_action_flag(main_player);
         }
@@ -459,13 +459,13 @@ impl EquipHandler {
 
     pub fn give_item_as_lot(&self, item_id: &ItemId, quantity: u8, gem: &Option<ItemId>) {
         // Done after item data is already loaded from params
-        let repo = unsafe { FD4ParamRepository::instance() }.unwrap();
+        let repo = unsafe { FD4ParamRepository::instance_mut() }.unwrap();
         let lot_id = 998990;
         let custom_id = 333;
         let mut using_gem = false;
         if let Some(gem) = gem && gem.category() == ItemCategory::Gem && item_id.category() == ItemCategory::Weapon {
             // TODO: Try to reuse repo if possible, but getting mutable row is an unsafe borrow
-            let repo = unsafe { FD4ParamRepository::instance() }.unwrap();
+            let repo = unsafe { FD4ParamRepository::instance_mut() }.unwrap();
             if let Some(wep) = unsafe { repo.get_mut::<EQUIP_PARAM_CUSTOM_WEAPON_ST>(custom_id) } {
                 let level = item_id.param_id() % 100;
                 wep.set_base_wep_id((item_id.param_id() - level) as i32);
@@ -484,8 +484,8 @@ impl EquipHandler {
             return;
         };
         // Non-default fields: lotItemId01=17000, lotItemCategory01=1, u16 lotItemBasePoint01=1000, u8 lotItemNum01=1, canExecByFriendlyGhost=1
-        lot.set_can_exec_by_friendly_ghost(1);
-        lot.set_can_exec_by_hostile_ghost(1);
+        lot.set_can_exec_by_friendly_ghost(true);
+        lot.set_can_exec_by_hostile_ghost(true);
         lot.set_lot_item_base_point01(1000);
         lot.set_lot_item_rarity(-1);
         lot.set_game_clear_offset(-1);

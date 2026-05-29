@@ -1,5 +1,5 @@
 use eldenring::{
-    Tree, cs::{BlockId, CSEzRabbitNoUpdateTask}, dlkr::DLAllocatorRef, fd4::{FD4ResCap, FD4ResCapHolder, FD4ResRep}
+    UnkDLTree, cs::{BlockId, CSEzRabbitNoUpdateTask}, fd4::{FD4ResCap, FD4ResCapHolder, FD4ResRep}
 };
 use fromsoftware_shared::{OwnedPtr, Program, Subclass, singleton};
 use pelite::pe64::Pe;
@@ -13,7 +13,7 @@ use crate::rva::{EMEVD_GROUP_SWITCH, EVENT_INS_CONSTRUCTOR, EVENT_INS_DESTRUCTOR
 type CSEmkEventInsCtor =
     extern "C" fn(*mut CSEmkEventIns, &EmkEventId, &[usize; 2], *const u8, u32, i32, i32);
 type CSEmkEventInsDtor = extern "C" fn(*mut CSEmkEventIns, u32);
-type EmkInstructionBanksExecute = extern "C" fn(*mut EmkInstructionBanks, f32, &CSEmkEventIns);
+type EmkInstructionBanksExecute = extern "C" fn(*const EmkInstructionBanks, f32, &CSEmkEventIns);
 
 #[repr(C)]
 pub struct EmkEventId {
@@ -196,7 +196,7 @@ pub struct EmkInstructionBanks {
 }
 
 impl EmkInstructionBanks {
-    pub fn execute(&mut self, time: f32, event: &CSEmkEventIns) {
+    pub fn execute(&self, time: f32, event: &CSEmkEventIns) {
         let execute: EmkInstructionBanksExecute =
             unsafe { transmute(Program::current().rva_to_va(EMEVD_GROUP_SWITCH).unwrap()) };
 
@@ -256,8 +256,10 @@ pub struct CSEmkSystem {
     pub unk80: CSEzRabbitNoUpdateTask,
     unka0: usize,
     unka8: usize,
-    pub unkb0: Tree<usize>,
-    pub allocator2: DLAllocatorRef,
+    // TODO: Is this type correct?
+    pub unkb0: UnkDLTree<usize>,
+    // Previously DLAllocatorRef
+    pub allocator2: usize,
     unkd0: usize,
     unkd8: usize,
     unke0: usize,
@@ -265,7 +267,7 @@ pub struct CSEmkSystem {
     unkf0: usize,
     unkf8: i32,
     unkfc: i32,
-    pub unk108: Tree<usize>,
+    pub unk108: UnkDLTree<usize>,
     _pad118: [u8; 8],
     pub event2: Option<NonNull<CSEmkEventIns>>,
 }

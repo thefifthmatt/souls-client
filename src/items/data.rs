@@ -168,10 +168,7 @@ impl ItemData {
         let Some(param) = unsafe { repo.res_cap_holder() }.entries().find(|e| e.struct_name() == MAGIC_PARAM_ST::NAME) else {
             panic!("{} not loaded", MAGIC_PARAM_ST::NAME);
         };
-        for index in 0..param.data.row_count() {
-            let Some((row_id, row)) = (unsafe { param.get_index::<MAGIC_PARAM_ST>(index) }) else {
-                continue;
-            };
+        for (row_id, row) in unsafe { param.data.rows::<MAGIC_PARAM_ST>() } {
             // Stonesword Key, I don't remember what prevents it from getting equipped normally
             if row_id == 8000 {
                 continue;
@@ -220,11 +217,7 @@ impl ItemData {
             }
         };
         log::info!("{} with {} rows", P::NAME, param.data.row_count());
-        for index in 0..param.data.row_count() {
-            let Some((row_id, row)) = (unsafe { param.get_index::<P>(index) }) else {
-                log::info!("{} {} not found", P::NAME, index);
-                continue;
-            };
+        for (row_id, row) in unsafe { param.data.rows::<P>() } {
             let name = match lookup_name(row_id as i32) {
                 Ok(name) => name,
                 Err(_) => {
