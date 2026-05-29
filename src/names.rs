@@ -29,11 +29,11 @@ pub struct NameClientState {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 // #[serde(tag = "type")]
 pub enum NameMode {
+    #[default]
     #[serde(rename = "none")]
     None,
     #[serde(rename = "test")]
     Test,
-    #[default]
     #[serde(rename = "cache")]
     Cache,
     #[serde(rename = "fresh")]

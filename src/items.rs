@@ -208,12 +208,6 @@ impl ItemUpdater {
         let cs_task = unsafe { CSTaskImp::instance().expect("Task system not initialized") };
         cs_task.run_recurring(move
             |_: &FD4TaskData| {
-                // Probably shouldn't go here but it should be safe enough
-                let client = Client::get();
-                if let Some(player_game_data) = unsafe { PlayerGameData::main_instance() } {
-                    client.set_player(&player_game_data.character_name());
-                }
-
                 let Some(data) = self.data.get() else {
                     return;
                 };

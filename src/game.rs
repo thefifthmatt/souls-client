@@ -33,6 +33,7 @@ pub fn get_game_hash() -> String {
     // Using both would also be possible.
     let game_id = get_game_id();
     let mut hasher = DefaultHasher::new();
+    hasher.write_u32(0x2B0708A2);
     hasher.write_u64(game_id);
     let hash = hasher.finish();
     format!("{:04x}", hash & 0xFFFF)

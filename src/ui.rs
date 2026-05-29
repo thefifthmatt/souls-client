@@ -11,7 +11,7 @@ use hudhook::imgui::{Condition, Context, FontAtlas, FontId, FontSource, StyleVar
 use hudhook::{ImguiRenderLoop, hooks::dx12::ImguiDx12Hooks, Hudhook};
 use serde::{Serialize, Deserialize};
 
-use crate::client::{Client, ClientModule};
+use crate::client::{Client, ClientModule, parse_network_time};
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct UiApiRequest {
@@ -29,6 +29,7 @@ pub struct WidgetChannel {
     // crossbeam_channel (used by practice tool) seems better but just use something simple
     toast_recv: Mutex<mpsc::Receiver<String>>,
     toast_send: mpsc::Sender<String>,
+    // Set by server (avoid lock contention if at all possible)
     pub timer: RwLock<Option<DateTime<FixedOffset>>>,
     pub info: RwLock<Vec<String>>,
 }
@@ -39,7 +40,12 @@ impl WidgetChannel {
     fn new() -> Self {
         let (toast_send, toast_recv) = mpsc::channel();
         // To test: "a\nb\nc".split("\n").map(|s| s.to_string()).collect()
-        Self { toast_send, toast_recv: Mutex::new(toast_recv), timer: RwLock::new(None), info: RwLock::new(vec![]) }
+        Self {
+            toast_send,
+            toast_recv: Mutex::new(toast_recv),
+            timer: RwLock::new(None),
+            info: RwLock::new(vec![]),
+        }
     }
 
     pub fn get() -> &'static Self {
@@ -66,14 +72,7 @@ impl WidgetChannel {
         }
         if let Some(timer) = &req.timer {
             // TODO: Set infinite arrows on match start. This was previously done here if timer != ""
-            if timer == "" {
-                *self.timer.write().unwrap() = None;
-            } else {
-                match DateTime::parse_from_rfc3339(timer) {
-                    Ok(time) => *self.timer.write().unwrap() = Some(time),
-                    Err(e) => log::error!("Bad timestamp {}: {}", timer, e),
-                };
-            }
+            *self.timer.write().unwrap() = parse_network_time(timer);
         }
         if let Some(info) = &req.info {
             *self.info.write().unwrap() = info.clone();
@@ -99,18 +98,24 @@ impl ClientModule for WidgetChannel {
 
 // Wrapper object just to force Send/Sync for it
 #[derive(Debug, Clone, Copy)]
-struct Fonts {
-    regular: FontId,
-    big: FontId,
+pub struct Fonts {
+    pub small: FontId,
+    pub regular: FontId,
+    pub big: FontId,
 }
 unsafe impl Send for Fonts {}
 unsafe impl Sync for Fonts {}
+
+pub struct UiData {
+    pub fonts: Fonts,
+}
 
 // This is the actual renderer, but it's kept internal to the channel as that's the public-facing interface
 #[derive(Default, Debug)]
 struct Widget
 {
     toasts: Vec<(Instant, String)>,
+    // TODO: If this is needed in other modules, make a widget context
     font: Option<Fonts>,
     scale: f32,
 }
@@ -154,6 +159,7 @@ impl ImguiRenderLoop for Widget {
     fn initialize(&mut self, ctx: &mut Context, _: &mut dyn RenderContext) {
         let fonts = ctx.fonts();
         self.font = Some(Fonts {
+            small: add_font(fonts, 20.0),
             regular: add_font(fonts, 36.0),
             big: add_font(fonts, 72.0),
         });
@@ -177,27 +183,27 @@ impl ImguiRenderLoop for Widget {
         let fonts = self.font.unwrap();
         let regular_font = ui.push_font(fonts.regular);
 
+        // NO_INPUTS = NO_NAV | NO_MOUSE_INPUTS
+        // NO_NAV = NO_NAV_INPUTS | NO_NAV_FOCUS
+        // NO_DECORATIONS = NO_TITLE_BAR | NO_RESIZE | NO_SCROLLBAR | NO_COLLAPSE
+        // NO_INPUTS and NO_MOUSE_INPUTS effectively imply NO_COLLAPSE (double-click to collapse)
         // ImGui flags/styles used by practice tool toasts
         let invisible_flags =
-            WindowFlags::NO_TITLE_BAR | WindowFlags::NO_RESIZE | WindowFlags::NO_MOVE
-            | WindowFlags::NO_SCROLLBAR | WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_INPUTS;
+            WindowFlags::NO_TITLE_BAR | WindowFlags::NO_RESIZE | WindowFlags::NO_MOVE | WindowFlags::NO_SCROLLBAR 
+            | WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_INPUTS;
+
         let invisible_styles = vec![StyleVar::WindowRounding(0.0), StyleVar::FrameBorderSize(0.0), StyleVar::WindowBorderSize(0.0)];
 
         let style_tokens: Vec<_> = invisible_styles.iter().map(|&v| ui.push_style_var(v)).collect();
-
-        let create_invisible_window = |name: &'static str| {
-            ui.window(name)
-                .flags(invisible_flags)
-                .bg_alpha(0.0)
-        };
 
         let io = ui.io();
         let [dw, dh] = io.display_size;
 
         let size = [dw * 0.6, dh * 0.21];
         let pos = [dw * 0.18, dh * 1.0];
-
-        create_invisible_window("##toasts")
+        ui.window("##toasts")
+            .flags(invisible_flags)
+            .bg_alpha(0.0)
             .position_pivot([0.0, 1.0])
             .position(pos, Condition::Always)
             .size(size, Condition::Always)
@@ -209,8 +215,9 @@ impl ImguiRenderLoop for Widget {
 
         let size = [dw * 0.3, dh * 0.5];
         let pos = [dw * 0.025, dh * 0.12];
-
-        create_invisible_window("##sidebar")
+        ui.window("##sidebar")
+            .flags(invisible_flags)
+            .bg_alpha(0.0)
             .position_pivot([0.0, 0.0])
             .position(pos, Condition::Always)
             .size(size, Condition::Always)
@@ -234,6 +241,9 @@ impl ImguiRenderLoop for Widget {
                     }
                 }
             });
+
+        let ui_data = UiData { fonts: fonts };
+        Client::get().render(ui, &ui_data);
 
         style_tokens.into_iter().rev().for_each(|v| v.pop());
         regular_font.end();

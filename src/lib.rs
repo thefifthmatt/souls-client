@@ -17,6 +17,8 @@ mod logger;
 mod program;
 mod rva;
 
+#[cfg(feature = "bosses")]
+mod bosses;
 #[cfg(feature = "items")]
 mod items;
 #[cfg(feature = "names")]
@@ -54,6 +56,8 @@ fn main() -> eyre::Result<()> {
         crate::items::ItemUpdater::initialize();
         #[cfg(feature = "spawn")]
         crate::spawn::EnemySpawner::initialize();
+        #[cfg(feature = "bosses")]
+        crate::bosses::BossClient::initialize();
     }
     if game == FromGame::DS3 && cfg!(feature = "ds3") {
         // Rely on patch fix for DS1R instead since neuter_arxan seems to be too slow at startup

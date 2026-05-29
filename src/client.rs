@@ -1,4 +1,5 @@
 use std::sync::{Arc, OnceLock, RwLock};
+use chrono::{DateTime, FixedOffset};
 use eldenring::{
     cs::{CSTaskGroupIndex, PlayerGameData, CSTaskImp},
     fd4::FD4TaskData,
@@ -28,8 +29,12 @@ pub trait ClientModule: Send + Sync {
     // between different modules. Different modules should use different field names (aside from CommonRequest).
     // This could be validated with serde_fields.
     fn handle_message(&self, json: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>>;
+
     // Memory edits which may need to wait until after Arxan is disabled
     fn hook(&self) {}
+
+    #[cfg(feature = "ui")]
+    fn render(&self, _ui: &hudhook::imgui::Ui, _ui_data: &crate::ui::UiData) {}
 }
 
 // Request fields shared by multiple modules which can be inserted into other requests using #[serde(flatten)]
@@ -155,6 +160,13 @@ impl Client {
         }
     }
 
+    #[cfg(feature = "ui")]
+    pub fn render(&self, ui: &hudhook::imgui::Ui, ui_data: &crate::ui::UiData) {
+        for module in self.modules.read().unwrap().iter() {
+            module.render(ui, ui_data);
+        }
+    }
+
     fn connect(&self) {
         // This can probably be done in loop directly?
         let name = self.player_name.read().unwrap();
@@ -248,7 +260,8 @@ impl Client {
             let mut websocket_req = (&url).into_client_request().unwrap();
             websocket_req.headers_mut().insert("Authorization", ws_auth.parse().unwrap());
             // Leave out URL
-            log::info!("Connecting as {}", self.unique_id);
+            let log_id = if url.starts_with("localhost") { &url } else { &self.unique_id };
+            log::info!("Connecting as {}", log_id);
             match connect_async(websocket_req).await {
                 Ok((ws_stream, _)) => {
                     let (mut sink, mut stream) = ws_stream.split();
@@ -264,6 +277,7 @@ impl Client {
                         client.connect();
                     });
                     loop {
+                        log::info!("Got to main loop");
                         tokio::select! {
                             Some(message_result) = stream.next() => {
                                 match message_result {
@@ -285,9 +299,16 @@ impl Client {
                             Some(data) = stream_recv.recv() => {
                                 // Currently, message requests are client-internal, but this could accept
                                 // an arbitrary JSON value if needed.
-                                if let Ok(text) = serde_json::to_string(&data) {
-                                    if let Err(e) = sink.send(Message::from(text)).await {
-                                        log::error!("Failed to send: {e}");
+                                match serde_json::to_string(&data) {
+                                    Ok(text) => {
+                                        log::info!("Sending on websocket: {text}");
+                                        if let Err(e) = sink.send(Message::from(text)).await {
+                                            log::error!("Failed to send: {e}");
+                                            break;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to serialize message: {e}");
                                         break;
                                     }
                                 }
@@ -341,3 +362,19 @@ impl Client {
     }
 }
 
+// Utility
+
+// Server timestamp shouldn't be bad, just log if so
+pub fn parse_network_time(timer: &str) -> Option<DateTime<FixedOffset>> {
+    if timer == "" {
+        None
+    } else {
+        match DateTime::parse_from_rfc3339(timer) {
+            Ok(time) => Some(time),
+            Err(e) => {
+                log::error!("Bad timestamp {}: {}", timer, e);
+                None
+            },
+        }
+    }
+}

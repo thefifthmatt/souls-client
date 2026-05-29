@@ -14,8 +14,8 @@ target = "x86_64-pc-windows-msvc"
 unused_crate_dependencies = "deny"
 
 [features]
-default = ["full"]
-full = ["eldenring", "ds3", "names", "ui", "items", "spawn"]
+default = ["eldenring", "bosses"]
+full = ["eldenring", "ds3", "names", "ui", "items", "spawn", "bosses"]
 # Enables using Steam API with Elden Ring version (this prevents dll from loading on other games)
 eldenring = ["dep:steamworks-sys"]
 # Enables using dearxan in DS3 (not needed with me3)
@@ -24,6 +24,7 @@ names = []
 ui = ["dep:hudhook", "dep:chrono"]
 items = ["dep:bimap"]
 spawn = ["names", "ui"]
+bosses = ["ui"]
 
 [dependencies]
 eldenring.path = "fromsoftware-rs/crates/eldenring"
