@@ -43,6 +43,8 @@ pub trait ClientModule: Send + Sync {
 pub struct CommonRequest {
     // For in-game interactions, filter for local id
     pub player: Option<String>,
+    // This is also interpreted differently by different modules, which should use different field names.
+    pub settings: Option<serde_json::Value>,
 }
 
 // Request object for server interactions. Currently not used in favor of CoreStreamRequest.
@@ -207,7 +209,7 @@ impl Client {
         let http_client = reqwest::ClientBuilder::new().timeout(Duration::from_secs(10)).build().unwrap();
 
         // Just do this once, it's super long expiry, otherwise retry gets annoying
-        let password = include_str!("server.txt").trim();
+        let password = include_str!("serverpass.txt").trim();
         let auth = loop {
             let req_client = http_client.clone();
             let url = format!("{}/api/login", self.get_http_base());
@@ -239,9 +241,7 @@ impl Client {
 
         // Misc client tasks to handle in async context
         tokio::spawn(async move {
-            // It's static, I guess
             let client = Client::get();
-            // let http_client = Arc::new(http_client);
             while let Some(req) = api_recv.recv().await {
                 log::info!("-> Sending {:?}", serde_json::to_string(&req));
                 let req_client = http_client.clone();
@@ -254,7 +254,7 @@ impl Client {
         });
 
         // Don't deal with url/uri libraries for now
-        let url = format!("{}/socket?id={}", self.get_ws_base(), self.unique_id);
+        let url = format!("{}/socket?id={}&v={}", self.get_ws_base(), self.unique_id, crate::VERSION);
         loop {
             // IntoClientRequest handles a bunch of fields that misbehave otherwise
             let mut websocket_req = (&url).into_client_request().unwrap();
@@ -265,19 +265,9 @@ impl Client {
             match connect_async(websocket_req).await {
                 Ok((ws_stream, _)) => {
                     let (mut sink, mut stream) = ws_stream.split();
-                    // TODO: Maybe should just use websocket for this, since it's done in the loop anyway
-                    // It should be done as soon as possible, but aside from doing it here, it won't be done if the name doesn't change
-                    // Unfortunately can return 502 during server restart
-                    tokio::spawn(async {
-                        let client = Client::get();
-                        client.connect();
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        client.connect();
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        client.connect();
-                    });
+                    // This ends up in stream_recv. There is an API method, but it can return 502 during server restarts
+                    self.connect();
                     loop {
-                        log::info!("Got to main loop");
                         tokio::select! {
                             Some(message_result) = stream.next() => {
                                 match message_result {

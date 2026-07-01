@@ -82,9 +82,9 @@ fn level_from_env(env: &str, default: LevelFilter) -> LevelFilter {
 
 fn log_format_config() -> Config {
     ConfigBuilder::new()
-        .set_time_level(LevelFilter::Off)
+        .set_time_level(LevelFilter::Error)
         .set_thread_level(LevelFilter::Off)
-        .set_time_level(LevelFilter::Off)
         .set_location_level(LevelFilter::Off)
+        .set_time_offset_to_local().unwrap()
         .build()
 }

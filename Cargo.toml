@@ -14,21 +14,23 @@ target = "x86_64-pc-windows-msvc"
 unused_crate_dependencies = "deny"
 
 [features]
-default = ["eldenring", "bosses"]
+default = ["eldenring", "bosses", "deathlink"]
 full = ["eldenring", "ds3", "names", "ui", "items", "spawn", "bosses"]
 # Enables using Steam API with Elden Ring version (this prevents dll from loading on other games)
 eldenring = ["dep:steamworks-sys"]
 # Enables using dearxan in DS3 (not needed with me3)
 ds3 = ["dep:dearxan"]
 names = []
-ui = ["dep:hudhook", "dep:chrono"]
+ui = ["dep:hudhook", "dep:chrono", "dep:debug"]
 items = ["dep:bimap"]
 spawn = ["names", "ui"]
-bosses = ["ui"]
+bosses = ["ui", "dep:hex_color"]
+deathlink = ["ui"]
 
 [dependencies]
 eldenring.path = "fromsoftware-rs/crates/eldenring"
 fromsoftware-shared.path = "fromsoftware-rs/crates/shared"
+debug = { path = "fromsoftware-rs/crates/debug", optional = true }
 
 closure-ffi = "5.0.1"
 erased-serde = "0.4.10"
@@ -41,9 +43,9 @@ pelite = "0.10.0"
 rand = "0.10.0"
 serde = { version = "1.0.228", features = ["serde_derive"] }
 serde_json = "1.0.149"
-simplelog = { version = "0.12.2", default-features = false }
+simplelog = { version = "0.12.2", features = ["local-offset"] }
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
-tokio-tungstenite = "0.28.0"
+tokio-tungstenite = { version = "0.28.0", features = ["native-tls"] }
 windows = { version = "0.62.2", features = [
     "Win32_System_SystemServices",
     "Win32_System_LibraryLoader",
@@ -56,6 +58,7 @@ winhook = "0.1.2"
 bimap = { version = "0.6.3", optional = true }
 chrono = { version = "0.4.44", optional = true }
 dearxan = { version = "0.5.3", optional = true }
+hex_color = { version = "3.0.0", optional = true }
 reqwest = { version = "0.13", features = ["json"] }
 steamworks-sys = { version = "0.10.0", optional = true }
 

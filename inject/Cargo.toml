@@ -1,0 +1,17 @@
+[package]
+name = "inject"
+edition = "2021"
+version = "0.1.0"
+authors = ["thefifthmatt"]
+
+[[bin]]
+name = "inject"
+path = "main.rs"
+
+[dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dependencies.hudhook]
+git = "https://github.com/veeenu/hudhook"

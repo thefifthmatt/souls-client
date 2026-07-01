@@ -3,6 +3,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, FixedOffset, Local};
+use debug::InputBlocker;
 use eldenring::cs::CSWindowImp;
 use eldenring::util::system::wait_for_system_init;
 use fromsoftware_shared::FromStatic;
@@ -100,8 +101,10 @@ impl ClientModule for WidgetChannel {
 #[derive(Debug, Clone, Copy)]
 pub struct Fonts {
     pub small: FontId,
+    pub small_bold: FontId,
     pub regular: FontId,
     pub big: FontId,
+    pub very_big: FontId,
 }
 unsafe impl Send for Fonts {}
 unsafe impl Sync for Fonts {}
@@ -146,10 +149,10 @@ impl Widget {
     }
 }
 
-fn add_font(fonts: &mut FontAtlas, size: f32) -> FontId {
+fn add_font(fonts: &mut FontAtlas, size: f32, data: &'static [u8]) -> FontId {
     fonts.add_font(&[FontSource::TtfData {
-        // Not free. Find it or else substitute other standard font
-        data: include_bytes!("AgmenaW1GForBandai.ttf"),
+        // TODO: Make feature for it
+        data,
         size_pixels: size,
         config: None,
     }])
@@ -157,20 +160,36 @@ fn add_font(fonts: &mut FontAtlas, size: f32) -> FontId {
 
 impl ImguiRenderLoop for Widget {
     fn initialize(&mut self, ctx: &mut Context, _: &mut dyn RenderContext) {
-        let fonts = ctx.fonts();
-        self.font = Some(Fonts {
-            small: add_font(fonts, 20.0),
-            regular: add_font(fonts, 36.0),
-            big: add_font(fonts, 72.0),
-        });
+        // TODO: Does this work moved first?
         if self.update_scale() {
             ctx.style_mut()
                 .scale_all_sizes(self.scale);
+            // There's also per-window font scaling
+            ctx.io_mut().font_global_scale = self.scale;
         }
+        let fonts = ctx.fonts();
+        self.font = Some(Fonts {
+            small: add_font(fonts, 22.0, include_bytes!("fonts/OpenSans_Condensed-Regular.ttf")),
+            small_bold: add_font(fonts, 22.0, include_bytes!("fonts/OpenSans_Condensed-Bold.ttf")),
+            regular: add_font(fonts, 36.0, include_bytes!("fonts/AgmenaW1GForBandai.ttf")),
+            // Could make these feature-dependent
+            big: add_font(fonts, 48.0, include_bytes!("fonts/AgmenaW1GForBandai.ttf")),
+            // 60 or 72
+            very_big: add_font(fonts, 72.0, include_bytes!("fonts/AgmenaW1GForBandai.ttf")),
+        });
         // *WidgetChannel::get().timer.write().unwrap() = Some(Local::now().fixed_offset());
     }
 
     fn render(&mut self, ui: &mut Ui) {
+        let blocker = InputBlocker::get_instance();
+        unsafe {
+            // Don't let this be a blocking error, especially since InputBlocker cannot coexist in multiple dlls
+            match blocker.install_hooks() {
+                Err(e) => log::error!("Failed to install input hooks for ImGui: {e}"),
+                _ => (),
+            }
+        }
+
         let channel = WidgetChannel::get();
 
         // This is simple enough that it can use machine-relative Instants, but the timer getting external input must use DateTime
@@ -178,7 +197,7 @@ impl ImguiRenderLoop for Widget {
         self.toasts.extend(channel.recv().into_iter()
             .inspect(|text| log::info!("Toast: {}", text))
             .map(|text| (now, text)));
-        self.toasts.retain(|(then, _)| then.elapsed() < std::time::Duration::from_secs(7));
+        self.toasts.retain(|(then, _)| then.elapsed() < std::time::Duration::from_secs(4));
 
         let fonts = self.font.unwrap();
         let regular_font = ui.push_font(fonts.regular);
@@ -197,9 +216,12 @@ impl ImguiRenderLoop for Widget {
         let style_tokens: Vec<_> = invisible_styles.iter().map(|&v| ui.push_style_var(v)).collect();
 
         let io = ui.io();
+        blocker.block_from_io(io);
+
         let [dw, dh] = io.display_size;
 
-        let size = [dw * 0.6, dh * 0.21];
+        // Height was previously 0.21 1.0, moved to avoid boss healthbar overlap
+        let size = [dw * 0.6, dh * 0.18];
         let pos = [dw * 0.18, dh * 1.0];
         ui.window("##toasts")
             .flags(invisible_flags)
