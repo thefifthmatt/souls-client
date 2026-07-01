@@ -91,11 +91,6 @@ unsafe extern "system" fn DllMain(_inst: HINSTANCE, reason: u32, _: *mut c_void)
         logger::init();
         logger::set_panic_hook();
 
-        // #[cfg(false)]
-        if libhotpatch::is_hotpatched() {
-            return true.into();
-        }
-
         std::thread::spawn(|| main().unwrap());
     }
 

@@ -444,16 +444,16 @@ impl ClientModule for BossClient {
 
         let mut ui_state = self.ui_state.write().unwrap();
 
-        // Make this basically opposite
-        if ui.is_key_pressed_no_repeat(hudhook::imgui::Key::Equal) {
-            // For UI updates
-            ui_state.toggle_open = true;
+        // Equal and Backslash both toggle, but between opposite states
+        let toggle_open = ui.is_key_pressed_no_repeat(hudhook::imgui::Key::Equal) || ui_state.toggle_open;
+        if toggle_open {
             if ui_state.is_hidden {
                 ui_state.is_hidden = false;
                 ui_state.is_open = false;
             } else {
                 ui_state.is_open = !ui_state.is_open;
             }
+            ui_state.toggle_open = false;
         }
         if ui.is_key_pressed_no_repeat(hudhook::imgui::Key::Backslash) {
             ui_state.is_open = false;
@@ -465,13 +465,10 @@ impl ClientModule for BossClient {
             .or_else(|| self.data.play_region_indices.get(&play_region))
             .copied();
         let index_changed = current_index.is_some() &&
-            (ui_state.region_index != current_index || ui_state.toggle_open || (ui_state.hide_completed && !hide_completed));
+            (ui_state.region_index != current_index || toggle_open || (ui_state.hide_completed && !hide_completed));
         let start_hide_completed = !ui_state.hide_completed && hide_completed;
         let next_visible = ui_state.next_visible.take();
         let debug_region = false;
-        if ui_state.toggle_open {
-            ui_state.toggle_open = false;
-        }
 
         let io = ui.io();
         let [dw, dh] = io.display_size;
